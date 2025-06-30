@@ -1,0 +1,210 @@
+
+function tcas_interactive_sim()
+    % Interactive 3-D TCAS demo (metric units, TA→RA, no-delay pilot response)
+    % Press "p" to pause/resume; use dialog to change velocities when paused.
+
+    clear; clc;
+    
+    % Validate horizontal separation
+% Validate horizontal separation
+sep0 = input('Initial horizontal separation (m) [e.g. 15000]: ');
+while sep0 <= 0 || sep0 > 100000
+    disp('Error: Separation must be between 1 and 100000 meters.');
+    sep0 = input('Re-enter horizontal separation (m): ');
+end
+
+% --- Aircraft 1 ---
+alt1_ft = input('Aircraft1 altitude (ft) [e.g. 10000]: ');
+while alt1_ft < 0 || alt1_ft > 40000
+    disp('Error: Altitude must be between 0 and 40000 ft.');
+    alt1_ft = input('Re-enter Aircraft1 altitude (ft): ');
+end
+
+% Suggest speed range based on altitude
+[v1_min, v1_max] = suggest_speed_range(alt1_ft);
+fprintf('Suggested speed range for Aircraft1: %d – %d knots\n', v1_min, v1_max);
+v1_kts = input('Aircraft1 speed (knots): ');
+while v1_kts < v1_min || v1_kts > v1_max
+    fprintf('Error: Speed must be between %d and %d knots for that altitude.\n', v1_min, v1_max);
+    v1_kts = input('Re-enter Aircraft1 speed (knots): ');
+end
+
+% --- Aircraft 2 ---
+alt2_ft = input('Aircraft2 altitude (ft) [e.g. 9500]: ');
+while alt2_ft < 0 || alt2_ft > 40000
+    disp('Error: Altitude must be between 0 and 40000 ft.');
+    alt2_ft = input('Re-enter Aircraft2 altitude (ft): ');
+end
+
+[v2_min, v2_max] = suggest_speed_range(alt2_ft);
+fprintf('Suggested speed range for Aircraft2: %d – %d knots\n', v2_min, v2_max);
+v2_kts = input('Aircraft2 speed (knots): ');
+while v2_kts < v2_min || v2_kts > v2_max
+    fprintf('Error: Speed must be between %d and %d knots for that altitude.\n', v2_min, v2_max);
+    v2_kts = input('Re-enter Aircraft2 speed (knots): ');
+end
+
+    
+    x1 = 0;   z1 = 0;              y1 = alt1_ft * 0.3048;
+    x2 = sep0; z2 = 0;             y2 = alt2_ft * 0.3048;
+    v1 = v1_kts * 0.514444;        
+    v2 = -v2_kts * 0.514444;       
+    
+    dt         = 0.1;       
+    T_total    = 200;      
+    N          = ceil(T_total/dt); %
+    R_TA       = 5000;    % 5 NM in m
+    R_RA       = 3000;    % 3 NM in m
+    Z_THR      = 1000;   % 1000 ft in m
+    climb_rate = 50;         % m/s climb rate on RA
+
+    %% 3. Prepare figure & controls
+    fig = figure('Name','TCAS Simulation','NumberTitle','off');
+    ax  = axes('Parent',fig); hold(ax,'on'); grid(ax,'on');
+    xlabel(ax,'East (m)'); ylabel(ax,'North (m)');
+    title(ax,'TCAS: "Traffic" → "Climb/Descend"','FontWeight','bold');
+    axis(ax,[-1000 sep0+1000 -2000 2000]); axis equal;
+    
+    % Plot handles
+    h1 = plot(ax,x1,y1,'bo','MarkerFaceColor','b');  % Aircraft1
+    h2 = plot(ax,x2,y2,'ro','MarkerFaceColor','r');  % Aircraft 2
+    
+    % Text labels
+    t1 = text(ax,x1,y1,' Aircraft1','VerticalAlignment','middle');
+    t2 = text(ax,x2,y2,' Aircraft 2','VerticalAlignment','middle');
+    
+    % Add TA/RA indicators
+    ta_indicator = text(ax, sep0/2, 1500, '', 'Color', 'm', 'FontWeight', 'bold', 'HorizontalAlignment', 'center');
+    ra_indicator = text(ax, sep0/2, 1000, '', 'Color', 'r', 'FontWeight', 'bold', 'HorizontalAlignment', 'center');
+    
+    legend(ax,{'Aircraft 1','Aircraft 2'},'Location','northeast');
+    
+    % Pause flag via KeyPressFcn
+    set(fig,'KeyPressFcn',@(~,evt) assignin('base','isPaused',strcmp(evt.Key,'p')));
+    assignin('base','isPaused',false);
+    
+    %% 4. State variables and logs
+    % State vectors: [x; y; z; vx; vy; vz]
+    AC1 = [x1; y1; z1; v1; 0; 0];
+    AC2 = [x2; y2; z2; v2; 0; 0];
+    pilot_vz = 0;
+    tcas_vz  = 0;
+    ta_fired = false;
+    ra_fired = false;
+    
+    %% 5. Main simulation loop
+    for k = 1:N
+        current_time = k*dt;
+        % Pause/resume
+        if evalin('base','isPaused')
+            answer = inputdlg({...
+               'Aircraft 1 vx (m/s):','Aircraft1 vy (m/s):','Aircraft 2 vz (m/s):', ...
+               'Aircraft2 vx (m/s):','Aircraft 2 vy (m/s):','Aircraft 2 vz (m/s):'}, ...
+               'Modify velocities',1, ...
+               {num2str(AC1(4)),num2str(AC1(5)),num2str(AC1(6)), ...
+                num2str(AC2(4)),num2str(AC2(5)),num2str(AC2(6))});
+            if ~isempty(answer)
+                AC1(4:6) = str2double(answer(1:3));
+                AC2(4:6) = str2double(answer(4:6));
+            end
+            assignin('base','isPaused',false);
+        end
+        
+        % Update horizontal motion
+        AC1(1:2) = AC1(1:2) + AC1(4:5)*dt;
+        AC2(1:2) = AC2(1:2) + AC2(4:5)*dt;
+        
+        % Calculate relative position and distances
+        relPos = AC2(1:3) - AC1(1:3);
+        horRange = norm(relPos([1 3]));  % Horizontal distance in X-Z plane
+        vertSep  = abs(relPos(2));       % Y-axis is vertical
+        relVel = AC2(4:6) - AC1(4:6);
+        % TCPA calculation (only meaningful if aircraft are converging)
+if dot(relPos(1:3), relVel(1:3)) < 0  % Only if closing distance
+    TCPA = -dot(relPos(1:3), relVel(1:3)) / dot(relVel(1:3), relVel(1:3));
+else
+    TCPA = Inf;  % Aircraft are diverging
+end
+
+fprintf('TCPA: %.1f seconds\n', TCPA);
+        % TCAS logic - TA/RA detection
+        if horRange <= R_RA && vertSep <= Z_THR && TCPA <= 60
+            % Resolution Advisory (RA) condition
+            if ~ra_fired
+                fprintf('[RA] Resolution Advisory! | Time: %.1fs | HorDist: %.1fm | VertSep: %.1fm\n', ...
+                    k*dt, horRange, vertSep);
+                ra_fired = true;
+                last_advisory_time = current_time;
+                pilot_acknowledged = false;  % Reset on new RA
+                
+                % Visual alert (flashing red)
+                set(ra_indicator, 'String', 'RA: CLIMB/DESCEND!', ...
+                    'BackgroundColor', [1 0.8 0.8]);
+            end
+            
+            % Determine RA direction (climb or descend)
+            if relPos(2) < 0
+                tcas_vz = climb_rate;     % climb if intruder below
+                ra_cmd = 'RA: CLIMB';
+            else
+                tcas_vz = -climb_rate;    % descend if intruder above
+                ra_cmd = 'RA: DESCEND';
+            end
+            set(ra_indicator, 'String', ra_cmd);
+            
+        elseif horRange <= R_TA && vertSep <= Z_THR && TCPA < 30
+            % Traffic Advisory (TA) condition
+            if ~ta_fired && ~ra_fired
+                fprintf('[TA] Traffic Advisory | Time: %.1fs | HorDist: %.1fm | VertSep: %.1fm\n', ...
+                    k*dt, horRange, vertSep);
+                ta_fired = true;
+            end
+            set(ta_indicator, 'String', 'TA: TRAFFIC');
+            set(ra_indicator, 'String', '');
+            
+            % No vertical maneuver for TA, just warning
+            tcas_vz = 0;
+        else
+            % No advisory
+            ta_fired = false;
+            ra_fired = false;
+            tcas_vz = 0;
+            set(ta_indicator, 'String', '');
+            set(ra_indicator, 'String', '');
+        end
+        
+        % Apply vertical maneuver if RA is active
+        if ra_fired
+            AC1(5) = tcas_vz;
+            AC2(5) = -tcas_vz; % Opposite maneuver for intruder (simplified)
+        else
+            AC1(5) = 0;
+            AC2(5) = 0;
+        end
+              
+        % Update vertical motion
+        AC1(2) = AC1(2) + AC1(5)*dt;
+        AC2(2) = AC2(2) + AC2(5)*dt;
+        
+        % Update plot
+        set(h1,'XData',AC1(1),'YData',AC1(2));
+        set(h2,'XData',AC2(1),'YData',AC2(2));
+        set(t1,'Position',[AC1(1),AC1(2),0]);
+        set(t2,'Position',[AC2(1),AC2(2),0]);
+        drawnow;
+    end
+    
+    disp('Simulation finished.');
+end
+
+function [vmin, vmax] = suggest_speed_range(alt_ft)
+    if alt_ft <= 10000
+        vmin = 100; vmax = 250;
+    elseif alt_ft <= 20000
+        vmin = 250; vmax = 350;
+    elseif alt_ft <= 30000
+        vmin = 300; vmax = 450;
+    else
+        vmin = 400; vmax = 600;
+    end
+end
