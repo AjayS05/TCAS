@@ -1,2 +1,4 @@
 # TCAS
-A digital twin of the aircraft TCAS system. This model simulates TCAS trying to avert a crash of two aircrafts in a two dimensional system.
+This project aims to develop a simplified simulation of a TCAS system using MATLAB, focusing on the interaction between two aircraft in shared airspace. The simulation will model aircraft motion, detect potential threats based on proximity and closure rates, and generate basic Traffic Advisories (TA) and Resolution Advisories (RA). The objective is to implement this system using software engineering principles from SWEBOK and ensure conformance to safety-critical software development practices outlined in IEC 61508.
+
+The goal is not to replicate the full complexity of certified TCAS systems, but to create an educational, traceable, and safety-focused prototype that demonstrates the challenges and principles of safety-critical software engineering, especially in the context of digital twins and simulation-driven validation.
