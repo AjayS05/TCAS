@@ -1,0 +1,230 @@
+function run_tcas_simulation()
+    % TCAS simulation with altitude/speed validation, alerts, acknowledgment, and logging
+
+    clear; clc;
+
+    %% === INITIAL USER INPUTS ===
+    % Get initial separation and validate range
+    initialSeparation_m = input('Initial horizontal separation (m) [e.g. 15000]: ');
+    while initialSeparation_m <= 3000 || initialSeparation_m > 100000
+        disp('Error: Separation must be between 3000 and 100000 meters.');
+        initialSeparation_m = input('Re-enter horizontal separation (m): ');
+    end
+
+    % Aircraft 1 altitude and speed
+    altitude1_ft = input('Aircraft 1 altitude (ft): ');
+    while altitude1_ft < 0 || altitude1_ft > 40000
+        disp('Altitude must be between 0 and 40000 ft.');
+        altitude1_ft = input('Re-enter Aircraft 1 altitude (ft): ');
+    end
+    [vmin1, vmax1] = suggest_speed_range(altitude1_ft);
+    fprintf('Suggested speed for Aircraft 1: %d - %d knots\n', vmin1, vmax1);
+    speed1_kts = input('Aircraft 1 speed (knots): ');
+    while speed1_kts < vmin1 || speed1_kts > vmax1
+        fprintf('Error: Speed must be between %d and %d knots.\n', vmin1, vmax1);
+        speed1_kts = input('Re-enter Aircraft 1 speed (knots): ');
+    end
+
+    % Aircraft 2 altitude and speed
+    altitude2_ft = input('Aircraft 2 altitude (ft): ');
+    while altitude2_ft < 0 || altitude2_ft > 40000
+        disp('Altitude must be between 0 and 40000 ft.');
+        altitude2_ft = input('Re-enter Aircraft 2 altitude (ft): ');
+    end
+    [vmin2, vmax2] = suggest_speed_range(altitude2_ft);
+    fprintf('Suggested speed for Aircraft 2: %d - %d knots\n', vmin2, vmax2);
+    speed2_kts = input('Aircraft 2 speed (knots): ');
+    while speed2_kts < vmin2 || speed2_kts > vmax2
+        fprintf('Error: Speed must be between %d and %d knots.\n', vmin2, vmax2);
+        speed2_kts = input('Re-enter Aircraft 2 speed (knots): ');
+    end
+
+    %% === INITIALIZATION ===
+    % Convert inputs to metric and initialize aircraft states
+    pos1 = [0; altitude1_ft * 0.3048; 0];     % East, Alt, North
+    pos2 = [initialSeparation_m; altitude2_ft * 0.3048; 0];
+    vel1 = [speed1_kts * 0.514444; 0; 0];
+    vel2 = [-speed2_kts * 0.514444; 0; 0];
+
+    timestep = 0.5;        % simulation step in seconds
+    simTime = 200;         % total simulation duration
+    steps = ceil(simTime / timestep);
+
+    % TCAS thresholds
+    TA_radius = 5000;      % TA horizontal range in meters
+    RA_radius = 3000;      % RA horizontal range in meters
+    verticalLimit = 1000;  % vertical threshold in meters
+    climbSpeed = 50;       % climb/descent speed in m/s
+
+    %% === PLOTTING SETUP ===
+    fig = figure('Name','TCAS Simulation','NumberTitle','off');
+    ax = axes('Parent', fig); hold(ax, 'on'); grid(ax, 'on');
+    xlabel(ax, 'East (m)'); ylabel(ax, 'Altitude (m)');
+    title(ax, 'TCAS Alert Simulation');
+    axis(ax, [-1000 initialSeparation_m+1000 -2000 2000]); axis equal;
+
+    % Plot aircraft and labels
+    p1 = plot(ax, pos1(1), pos1(2), 'bo', 'MarkerFaceColor', 'b');
+    p2 = plot(ax, pos2(1), pos2(2), 'ro', 'MarkerFaceColor', 'r');
+    t1 = text(ax, pos1(1), pos1(2), ' Aircraft 1');
+    t2 = text(ax, pos2(1), pos2(2), ' Aircraft 2');
+
+    % Draw RA safety boxes around each aircraft
+    box1 = rectangle(ax, 'Position', [pos1(1)-RA_radius, pos1(2)-verticalLimit/2, 2*RA_radius, verticalLimit], 'EdgeColor','b', 'LineStyle','--');
+    box2 = rectangle(ax, 'Position', [pos2(1)-RA_radius, pos2(2)-verticalLimit/2, 2*RA_radius, verticalLimit], 'EdgeColor','r', 'LineStyle','--');
+
+    % Display alerts and pilot acknowledgment
+    taAlert = annotation(fig, 'textbox', [0.35, 0.88, 0.3, 0.05], 'String', '', 'Color', 'm', 'FontWeight','bold', 'HorizontalAlignment','center', 'EdgeColor','none');
+    raAlert = annotation(fig, 'textbox', [0.35, 0.82, 0.3, 0.05], 'String', '', 'Color', 'r', 'FontWeight','bold', 'HorizontalAlignment','center', 'EdgeColor','none');
+    ackText = text(ax, 0, 1800, '', 'Color', 'k', 'FontWeight', 'bold', 'HorizontalAlignment', 'center');
+
+    % Set up keypress to pause simulation
+    set(fig, 'KeyPressFcn', @(~,evt) assignin('base','isPaused', strcmp(evt.Key,'p')));
+    assignin('base','isPaused', false);
+
+    %% === INITIAL STATE VARIABLES ===
+    aircraft1 = [pos1; vel1];  % [x; y; z; vx; vy; vz]
+    aircraft2 = [pos2; vel2];
+    verticalCmd = 0;
+    TA_on = false;
+    RA_on = false;
+    pilot_ack = false;
+
+    %% === MAIN LOOP ===
+    for k = 1:steps
+        timeNow = k * timestep;
+
+        % Allow pausing the simulation and modifying velocity
+        if evalin('base','isPaused')
+            inputData = inputdlg({'A1 vx','A1 vy','A1 vz','A2 vx','A2 vy','A2 vz'}, ...
+                'Change Velocities', 1, ...
+                {num2str(aircraft1(4)), num2str(aircraft1(5)), num2str(aircraft1(6)), ...
+                 num2str(aircraft2(4)), num2str(aircraft2(5)), num2str(aircraft2(6))});
+            if ~isempty(inputData)
+                aircraft1(4:6) = str2double(inputData(1:3));
+                aircraft2(4:6) = str2double(inputData(4:6));
+            end
+            assignin('base','isPaused', false);
+        end
+
+        % Update positions
+        aircraft1(1:2) = aircraft1(1:2) + aircraft1(4:5) * timestep;
+        aircraft2(1:2) = aircraft2(1:2) + aircraft2(4:5) * timestep;
+
+        % Calculate range and closure
+        diff = aircraft2(1:3) - aircraft1(1:3);
+        horizontalDist = norm(diff([1 3]));
+        verticalSep = abs(diff(2));
+        relVel = aircraft2(4:6) - aircraft1(4:6);
+
+        % Calculate TCPA
+        if dot(diff, relVel) < 0
+            tcpa = -dot(diff, relVel) / dot(relVel, relVel);
+        else
+            tcpa = Inf;
+        end
+
+        %% === TCAS ALERT LOGIC ===
+        if horizontalDist <= RA_radius && verticalSep <= verticalLimit && tcpa <= 25
+            if ~RA_on
+                fprintf('[RA] Resolution Advisory triggered at t=%.1fs\n', timeNow);
+                RA_on = true;
+                pilot_ack = false;
+            end
+            if ~pilot_ack
+                set(taAlert, 'String', 'TA: TRAFFIC'); drawnow; pause(1.5);
+                set(raAlert, 'String', 'RA: CLIMB/DESCEND'); drawnow; pause(2);
+                set(ackText, 'String', 'Pilot Acknowledged RA'); drawnow; pause(1.5);
+                pilot_ack = true;
+                fprintf('[ACK] RA acknowledged at t=%.1fs\n', timeNow);
+            end
+            verticalCmd = climbSpeed * (-1)^(diff(2) >= 0);
+            if verticalCmd > 0
+                set(raAlert, 'String', 'RA: CLIMB');
+            else
+                set(raAlert, 'String', 'RA: DESCEND');
+            end
+        elseif horizontalDist <= TA_radius && verticalSep <= verticalLimit && tcpa < 45 && ~RA_on
+            if ~TA_on
+                fprintf('[TA] Traffic Advisory triggered at t=%.1fs\n', timeNow);
+                TA_on = true;
+            end
+            set(taAlert, 'String', 'TA: TRAFFIC');
+            set(raAlert, 'String', '');
+            set(ackText, 'String', '');
+            verticalCmd = 0;
+        else
+            TA_on = false;
+            RA_on = false;
+            pilot_ack = false;
+            verticalCmd = 0;
+            set(taAlert, 'String', '');
+            set(raAlert, 'String', '');
+            set(ackText, 'String', '');
+        end
+
+        %% === VERTICAL RESPONSE ===
+        if RA_on && pilot_ack
+            % Calculate future altitude
+            alt1 = aircraft1(2) / 0.3048;
+            alt2 = aircraft2(2) / 0.3048;
+            nextAlt1 = alt1 + verticalCmd * timestep / 0.3048;
+            nextAlt2 = alt2 - verticalCmd * timestep / 0.3048;
+
+            safe1 = nextAlt1 >= 1000 && nextAlt1 <= 40000;
+            safe2 = nextAlt2 >= 1000 && nextAlt2 <= 40000;
+
+            if safe1 && safe2
+                aircraft1(5) = verticalCmd;
+                aircraft2(5) = -verticalCmd;
+            elseif safe1
+                aircraft1(5) = verticalCmd;
+                aircraft2(5) = 0;
+            elseif safe2
+                aircraft1(5) = 0;
+                aircraft2(5) = -verticalCmd;
+            else
+                aircraft1(5) = 0;
+                aircraft2(5) = 0;
+                set(raAlert, 'String', 'RA BLOCKED');
+                fprintf('[RA BLOCKED] Both aircraft at limit at t=%.1fs\n', timeNow);
+            end
+        else
+            aircraft1(5) = 0;
+            aircraft2(5) = 0;
+        end
+
+        %% === UPDATE PLOT ===
+        aircraft1(2) = aircraft1(2) + aircraft1(5) * timestep;
+        aircraft2(2) = aircraft2(2) + aircraft2(5) * timestep;
+        set(p1, 'XData', aircraft1(1), 'YData', aircraft1(2));
+        set(p2, 'XData', aircraft2(1), 'YData', aircraft2(2));
+        set(t1, 'Position', [aircraft1(1), aircraft1(2), 0]);
+        set(t2, 'Position', [aircraft2(1), aircraft2(2), 0]);
+        set(box1, 'Position', [aircraft1(1)-RA_radius, aircraft1(2)-verticalLimit/2, 2*RA_radius, verticalLimit]);
+        set(box2, 'Position', [aircraft2(1)-RA_radius, aircraft2(2)-verticalLimit/2, 2*RA_radius, verticalLimit]);
+        drawnow;
+
+        %% === LOG STATUS ===
+        alt1 = aircraft1(2) / 0.3048;
+        alt2 = aircraft2(2) / 0.3048;
+        spd1 = aircraft1(4) / 0.514444;
+        spd2 = abs(aircraft2(4)) / 0.514444;
+        fprintf('[LOG] t=%.1fs | A1_Alt=%.1fft | A2_Alt=%.1fft | A1_Spd=%.1fkt | A2_Spd=%.1fkt | TCPA=%.1fs | TA=%s | RA=%s\n', ...
+            timeNow, alt1, alt2, spd1, spd2, tcpa, string(TA_on), string(RA_on));
+    end
+
+    disp('Simulation complete.');
+end
+
+function [vmin, vmax] = suggest_speed_range(alt_ft)
+    if alt_ft <= 10000
+        vmin = 100; vmax = 250;
+    elseif alt_ft <= 20000
+        vmin = 250; vmax = 350;
+    elseif alt_ft <= 30000
+        vmin = 300; vmax = 450;
+    else
+        vmin = 400; vmax = 600;
+    end
+end
