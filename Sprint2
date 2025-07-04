@@ -1,6 +1,4 @@
-https://www.geeksforgeeks.org/software-engineering/cause-effect-graphing-in-software-engineering/
-https://www.geeksforgeeks.org/software-testing/software-testing-tutorial/
-https://www.guru99.com/software-testing.html%% 
+
 function tcas_interactive_sim()
     % Interactive 3-D TCAS demo (metric units, TA→RA, no-delay pilot response)
     % Press "p" to pause/resume; use dialog to change velocities when paused.
